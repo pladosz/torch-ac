@@ -10,8 +10,13 @@ def worker(conn, env):
                 obs = env.reset()
             conn.send((obs, reward, done, info))
         elif cmd == "reset":
+            env.seed(120)
             obs = env.reset()
+            env.seed(120)
             conn.send(obs)
+        elif cmd == "pos":
+            pos = env.agent_pos
+            conn.send(pos)
         else:
             raise NotImplementedError
 
@@ -48,6 +53,13 @@ class ParallelEnv(gym.Env):
             obs = self.envs[0].reset()
         results = zip(*[(obs, reward, done, info)] + [local.recv() for local in self.locals])
         return results
+    
+    def get_positions(self):
+        for local in self.locals:
+            local.send(("pos",None))
+        pos = self.envs[0].agent_pos
+        positions = [pos] + [local.recv() for local in self.locals]
+        return positions
 
     def render(self):
         raise NotImplementedError

@@ -3,12 +3,13 @@ import torch
 
 from torch_ac.format import default_preprocess_obss
 from torch_ac.utils import DictList, ParallelEnv
+import copy
 
 class BaseAlgo(ABC):
     """The base class for RL algorithms."""
 
-    def __init__(self, envs, acmodel, device, num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
-                 value_loss_coef, max_grad_norm, recurrence, preprocess_obss, reshape_reward):
+    def __init__(self, envs, acmodel, rew_gen_model, RND_model, device, num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
+                 value_loss_coef, max_grad_norm, recurrence, preprocess_obss, reshape_reward, agent_id):
         """
         Initializes a `BaseAlgo` instance.
 
@@ -44,9 +45,10 @@ class BaseAlgo(ABC):
         """
 
         # Store parameters
-
         self.env = ParallelEnv(envs)
         self.acmodel = acmodel
+        self.rew_gen_model = rew_gen_model
+        self.RND_model = RND_model
         self.device = device
         self.num_frames_per_proc = num_frames_per_proc
         self.discount = discount
@@ -58,6 +60,7 @@ class BaseAlgo(ABC):
         self.recurrence = recurrence
         self.preprocess_obss = preprocess_obss or default_preprocess_obss
         self.reshape_reward = reshape_reward
+        self.agent_id =agent_id
 
         # Control parameters
 
@@ -90,17 +93,20 @@ class BaseAlgo(ABC):
         self.rewards = torch.zeros(*shape, device=self.device)
         self.advantages = torch.zeros(*shape, device=self.device)
         self.log_probs = torch.zeros(*shape, device=self.device)
+        self.hidden_state = self.rew_gen_model.hidden_state
 
         # Initialize log values
 
         self.log_episode_return = torch.zeros(self.num_procs, device=self.device)
         self.log_episode_reshaped_return = torch.zeros(self.num_procs, device=self.device)
         self.log_episode_num_frames = torch.zeros(self.num_procs, device=self.device)
+        self.log_episode_intrinsic_reward = torch.zeros(self.num_procs, device=self.device)
 
         self.log_done_counter = 0
         self.log_return = [0] * self.num_procs
         self.log_reshaped_return = [0] * self.num_procs
         self.log_num_frames = [0] * self.num_procs
+        self.log_intrinsic_reward = [0] * self.num_procs
 
     def collect_experiences(self):
         """Collects rollouts and computes advantages.
@@ -122,7 +128,7 @@ class BaseAlgo(ABC):
             Useful stats about the training process, including the average
             reward, policy loss, value loss, etc.
         """
-
+        print(self.agent_id)
         for i in range(self.num_frames_per_proc):
             # Do one agent-environment interaction
 
@@ -134,7 +140,28 @@ class BaseAlgo(ABC):
                     dist, value = self.acmodel(preprocessed_obs)
             action = dist.sample()
 
+            ## add rew_gen reward
+            #preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
+            observation_shape = (len(preprocessed_obs),) + preprocessed_obs[0].image.shape
+            observations = torch.zeros((observation_shape))
+            for ii in range(0,len(preprocessed_obs)):
+                observations[ii,:] = preprocessed_obs[ii].image
+            observations = observations.transpose(1, 3).transpose(2, 3)
+            representations = self.RND_model.get_state_rep(observations)
+            reward_intrinsic, self.hidden_state = self.rew_gen_model(representations,self.hidden_state * self.mask.unsqueeze(1).unsqueeze(0))
+
             obs, reward, done, _ = self.env.step(action.cpu().numpy())
+            #agent_position = copy.deepcopy(self.env.get_positions())# torch.tensor(self.env.envs[i].agent_pos)
+            total_reward = reward_intrinsic.squeeze().cpu() + torch.tensor(reward)
+            reward = tuple(total_reward.tolist())
+            #agent_position = copy.deepcopy(self.env.get_positions())# torch.tensor(self.env.envs[i].agent_pos)
+            #for kk in range(0,16):
+            #    agent_state = torch.tensor(agent_position[kk])
+            #    reward_state=torch.tensor([0,0])+self.agent_id
+            #    reward = list(reward)
+            #    if torch.all(torch.eq(agent_state,reward_state)):
+            #        reward[kk] = 1 + reward[kk]
+            #    reward = tuple(reward)
 
             # Update experiences values
 
@@ -156,11 +183,12 @@ class BaseAlgo(ABC):
                 self.rewards[i] = torch.tensor(reward, device=self.device)
             self.log_probs[i] = dist.log_prob(action)
 
-            # Update log values
+            # Update log values (seprate intrinsic reward from env reward for logging purpouses)
 
-            self.log_episode_return += torch.tensor(reward, device=self.device, dtype=torch.float)
-            self.log_episode_reshaped_return += self.rewards[i]
+            self.log_episode_return += torch.tensor(reward, device=self.device, dtype=torch.float) - reward_intrinsic.squeeze().to(self.device)
+            self.log_episode_reshaped_return += self.rewards[i] - reward_intrinsic.squeeze()
             self.log_episode_num_frames += torch.ones(self.num_procs, device=self.device)
+            self.log_episode_intrinsic_reward += reward_intrinsic.squeeze()
 
             for i, done_ in enumerate(done):
                 if done_:
@@ -168,10 +196,12 @@ class BaseAlgo(ABC):
                     self.log_return.append(self.log_episode_return[i].item())
                     self.log_reshaped_return.append(self.log_episode_reshaped_return[i].item())
                     self.log_num_frames.append(self.log_episode_num_frames[i].item())
+                    self.log_intrinsic_reward.append(self.log_episode_intrinsic_reward[i].item())
 
             self.log_episode_return *= self.mask
             self.log_episode_reshaped_return *= self.mask
             self.log_episode_num_frames *= self.mask
+            self.log_episode_intrinsic_reward  *= self.mask
 
         # Add advantage and return to experiences
 
@@ -227,13 +257,15 @@ class BaseAlgo(ABC):
             "return_per_episode": self.log_return[-keep:],
             "reshaped_return_per_episode": self.log_reshaped_return[-keep:],
             "num_frames_per_episode": self.log_num_frames[-keep:],
-            "num_frames": self.num_frames
+            "num_frames": self.num_frames,
+            "intrinsic_reward_per_episode": self.log_intrinsic_reward[-keep:]
         }
 
         self.log_done_counter = 0
         self.log_return = self.log_return[-self.num_procs:]
         self.log_reshaped_return = self.log_reshaped_return[-self.num_procs:]
         self.log_num_frames = self.log_num_frames[-self.num_procs:]
+        self.log_intrinsic_reward = self.log_intrinsic_reward[-self.num_procs:]
 
         return exps, logs
 
