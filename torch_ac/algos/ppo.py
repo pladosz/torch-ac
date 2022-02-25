@@ -27,7 +27,8 @@ class PPOAlgo(BaseAlgo):
         self.batch_num = 0
 
     def update_parameters(self, exps):
-        # Collect experiences
+        #update popart 
+        self.acmodel.critic[2].update_parameters(exps.value)
 
         for _ in range(self.epochs):
             # Initialize log values
@@ -56,23 +57,20 @@ class PPOAlgo(BaseAlgo):
                     # Create a sub-batch of experience
 
                     sb = exps[inds + i]
-
                     # Compute loss
 
                     if self.acmodel.recurrent:
-                        dist, value, memory = self.acmodel(sb.obs, memory * sb.mask)
+                        dist, value, normalized_value, memory = self.acmodel(sb.obs, memory * sb.mask)
                     else:
-                        dist, value = self.acmodel(sb.obs)
+                        dist, value, normalized_value = self.acmodel(sb.obs)
 
                     entropy = dist.entropy().mean()
-
                     ratio = torch.exp(dist.log_prob(sb.action) - sb.log_prob)
                     surr1 = ratio * sb.advantage
                     surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * sb.advantage
                     policy_loss = -torch.min(surr1, surr2).mean()
-
-                    value_clipped = sb.value + torch.clamp(value - sb.value, -self.clip_eps, self.clip_eps)
-                    surr1 = (value - sb.returnn).pow(2)
+                    value_clipped = sb.normalized_value + torch.clamp(normalized_value - sb.normalized_value, -self.clip_eps, self.clip_eps)
+                    surr1 = (normalized_value - sb.returnn).pow(2)
                     surr2 = (value_clipped - sb.returnn).pow(2)
                     value_loss = torch.max(surr1, surr2).mean()
 
@@ -101,7 +99,9 @@ class PPOAlgo(BaseAlgo):
 
                 # Update actor-critic
 
-                self.optimizer.zero_grad()
+                #self.optimizer.zero_grad()
+                for param in self.acmodel.parameters():
+                    param.grad = None
                 batch_loss.backward()
                 grad_norm = sum(p.grad.data.norm(2).item() ** 2 for p in self.acmodel.parameters()) ** 0.5
                 torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(), self.max_grad_norm)
@@ -114,6 +114,8 @@ class PPOAlgo(BaseAlgo):
                 log_policy_losses.append(batch_policy_loss)
                 log_value_losses.append(batch_value_loss)
                 log_grad_norms.append(grad_norm)
+                #normalize weights
+                self.acmodel.critic[2].normalize_weights()
 
         # Log some values
 

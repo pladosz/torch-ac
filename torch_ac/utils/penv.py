@@ -1,5 +1,6 @@
 from multiprocessing import Process, Pipe
 import gym
+import numpy as np
 
 def worker(conn, env):
     while True:
@@ -7,7 +8,9 @@ def worker(conn, env):
         if cmd == "step":
             obs, reward, done, info = env.step(data)
             if done:
+                env.seed(120)
                 obs = env.reset()
+                env.seed(120)
             conn.send((obs, reward, done, info))
         elif cmd == "reset":
             env.seed(120)
@@ -16,6 +19,8 @@ def worker(conn, env):
             conn.send(obs)
         elif cmd == "pos":
             pos = env.agent_pos
+            rot = env.agent_dir
+            pos = np.insert(pos,[0], rot)
             conn.send(pos)
         else:
             raise NotImplementedError
@@ -58,6 +63,8 @@ class ParallelEnv(gym.Env):
         for local in self.locals:
             local.send(("pos",None))
         pos = self.envs[0].agent_pos
+        rot = self.envs[0].agent_dir
+        pos = np.insert(pos,[0], rot)
         positions = [pos] + [local.recv() for local in self.locals]
         return positions
 
