@@ -4,11 +4,12 @@ import torch
 from torch_ac.format import default_preprocess_obss
 from torch_ac.utils import DictList, ParallelEnv
 import copy
+import os
 
 class BaseAlgo(ABC):
     """The base class for RL algorithms."""
 
-    def __init__(self, envs, acmodel, rew_gen_model, RND_model, device, num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
+    def __init__(self, envs, acmodel, rew_gen_model, RND_model, procs, device, num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
                  value_loss_coef, max_grad_norm, recurrence, preprocess_obss, reshape_reward, agent_id):
         """
         Initializes a `BaseAlgo` instance.
@@ -43,9 +44,9 @@ class BaseAlgo(ABC):
             a function that shapes the reward, takes an
             (observation, action, reward, done) tuple as an input
         """
-
         # Store parameters
-        self.env = ParallelEnv(envs)
+        #self.env = ParallelEnv(envs)
+        self.env = envs
         self.acmodel = acmodel
         self.rew_gen_model = rew_gen_model
         self.RND_model = RND_model
@@ -74,7 +75,7 @@ class BaseAlgo(ABC):
 
         # Store helpers values
 
-        self.num_procs = len(envs)
+        self.num_procs = procs
         self.num_frames = self.num_frames_per_proc * self.num_procs
 
         # Initialize experience values
@@ -151,7 +152,7 @@ class BaseAlgo(ABC):
             #agent_position = copy.deepcopy(self.env.get_positions())
             #agent_position = torch.tensor(agent_position).float()
             #representations = agent_position
-            reward_intrinsic, self.hidden_state = self.rew_gen_model(representations,self.hidden_state * self.mask.unsqueeze(1).unsqueeze(0))
+            reward_intrinsic, self.hidden_state = self.rew_gen_model(representations, self.hidden_state * self.mask.unsqueeze(1).unsqueeze(0))
 
             obs, reward, done, _ = self.env.step(action.cpu().numpy())
             #agent_position = copy.deepcopy(self.env.get_positions())# torch.tensor(self.env.envs[i].agent_pos)
@@ -281,3 +282,41 @@ class BaseAlgo(ABC):
     @abstractmethod
     def update_parameters(self):
         pass
+
+    def reset(self):
+        shape = (self.num_frames_per_proc, self.num_procs)
+
+        self.obs = self.env.reset()
+        self.obss = [None]*(shape[0])
+        if self.acmodel.recurrent:
+            self.memory.detach()
+            self.memories.detach()
+            self.memory = torch.zeros(shape[1], self.acmodel.memory_size, device=self.device)
+            self.memories = torch.zeros(*shape, self.acmodel.memory_size, device=self.device)
+        self.mask = torch.ones(shape[1], device=self.device)
+        self.masks = torch.zeros(*shape, device=self.device)
+        self.actions = torch.zeros(*shape, device=self.device, dtype=torch.int)
+        self.values = torch.zeros(*shape, device=self.device)
+        self.normalized_values = torch.zeros(*shape, device=self.device)
+        self.rewards = torch.zeros(*shape, device=self.device)
+        self.advantages = torch.zeros(*shape, device=self.device)
+        self.log_probs = torch.zeros(*shape, device=self.device)
+        self.rew_gen_model.init_hidden()
+        self.hidden_state = self.rew_gen_model.hidden_state
+        # Initialize log values
+
+        self.log_episode_return = torch.zeros(self.num_procs, device=self.device)
+        self.log_episode_reshaped_return = torch.zeros(self.num_procs, device=self.device)
+        self.log_episode_num_frames = torch.zeros(self.num_procs, device=self.device)
+        self.log_episode_intrinsic_reward = torch.zeros(self.num_procs, device=self.device)
+
+        self.log_done_counter = 0
+        self.log_return = [0] * self.num_procs
+        self.log_reshaped_return = [0] * self.num_procs
+        self.log_num_frames = [0] * self.num_procs
+        self.log_intrinsic_reward = [0] * self.num_procs
+    
+    def load_model(self, dictionary):
+        self.acmodel.load_state_dict(dictionary)
+
+

@@ -1,6 +1,7 @@
 from multiprocessing import Process, Pipe
 import gym
 import numpy as np
+import time
 
 def worker(conn, env):
     while True:
@@ -8,20 +9,23 @@ def worker(conn, env):
         if cmd == "step":
             obs, reward, done, info = env.step(data)
             if done:
-                env.seed(120)
+                env.seed(140)
                 obs = env.reset()
-                env.seed(120)
+                env.seed(140)
             conn.send((obs, reward, done, info))
         elif cmd == "reset":
-            env.seed(120)
+            env.seed(140)
             obs = env.reset()
-            env.seed(120)
+            env.seed(140)
             conn.send(obs)
         elif cmd == "pos":
             pos = env.agent_pos
             rot = env.agent_dir
             pos = np.insert(pos,[0], rot)
             conn.send(pos)
+        elif cmd == "close":
+            env.close()
+            exit()
         else:
             raise NotImplementedError
 
@@ -36,12 +40,14 @@ class ParallelEnv(gym.Env):
         self.action_space = self.envs[0].action_space
 
         self.locals = []
+        self.processes = []
         for env in self.envs[1:]:
             local, remote = Pipe()
             self.locals.append(local)
             p = Process(target=worker, args=(remote, env))
             p.daemon = True
             p.start()
+            self.processes.append(p)
             remote.close()
 
     def reset(self):
@@ -67,6 +73,13 @@ class ParallelEnv(gym.Env):
         pos = np.insert(pos,[0], rot)
         positions = [pos] + [local.recv() for local in self.locals]
         return positions
+    
+    def close(self):
+        for local,process in zip(self.locals, self.processes):
+            local.send(("close",None))
+            local.close()
+            process.terminate()
+            process.join()
 
     def render(self):
         raise NotImplementedError
