@@ -10,7 +10,7 @@ class BaseAlgo(ABC):
     """The base class for RL algorithms."""
 
     def __init__(self, envs, acmodel, rew_gen_model, RND_model, procs, device, num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
-                 value_loss_coef, max_grad_norm, recurrence, preprocess_obss, reshape_reward, agent_id):
+                 value_loss_coef, max_grad_norm, recurrence, preprocess_obss, reshape_reward, agent_id, txt_logger = None):
         """
         Initializes a `BaseAlgo` instance.
 
@@ -46,6 +46,8 @@ class BaseAlgo(ABC):
         """
         # Store parameters
         #self.env = ParallelEnv(envs)
+        if txt_logger is not None:
+            txt_logger.info('storing parameters')
         self.env = envs
         self.acmodel = acmodel
         self.rew_gen_model = rew_gen_model
@@ -69,6 +71,8 @@ class BaseAlgo(ABC):
         assert self.num_frames_per_proc % self.recurrence == 0
 
         # Configure acmodel
+        if txt_logger is not None:
+            txt_logger.info('initializing models')
 
         self.acmodel.to(self.device)
         self.acmodel.train()
@@ -81,6 +85,8 @@ class BaseAlgo(ABC):
         # Initialize experience values
 
         shape = (self.num_frames_per_proc, self.num_procs)
+        if txt_logger is not None:
+            txt_logger.info('initializing values')
 
         self.obs = self.env.reset()
         self.obss = [None]*(shape[0])
