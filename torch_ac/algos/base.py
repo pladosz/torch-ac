@@ -147,20 +147,20 @@ class BaseAlgo(ABC):
                     dist, value, normalized_value, = self.acmodel(preprocessed_obs)
             action = dist.sample()
 
+            obs, reward, done, _ = self.env.step(action.cpu().numpy())
             ## add rew_gen reward
-            #preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
+            preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
             observation_shape = (len(preprocessed_obs),) + preprocessed_obs[0].image.shape
             observations = torch.zeros((observation_shape))
             for ii in range(0,len(preprocessed_obs)):
                 observations[ii,:] = preprocessed_obs[ii].image
             observations = observations.transpose(1, 3).transpose(2, 3)
             #representations = self.RND_model.get_state_rep(observations)
-            representations = torch.flatten(observations, start_dim=1)/10
+            representations = torch.flatten(observations, start_dim = 1)/10
             #agent_position = copy.deepcopy(self.env.get_positions())
             #agent_position = torch.tensor(agent_position).float()
             #representations = agent_position
             reward_intrinsic, self.hidden_state = self.rew_gen_model(representations, self.hidden_state * self.mask.unsqueeze(1).unsqueeze(0))
-            obs, reward, done, _ = self.env.step(action.cpu().numpy())
             #agent_position = copy.deepcopy(self.env.get_positions())# torch.tensor(self.env.envs[i].agent_pos)
             total_reward = reward_intrinsic.squeeze().cpu() + torch.tensor(reward)
             reward = tuple(total_reward.tolist())
