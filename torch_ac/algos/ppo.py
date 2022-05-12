@@ -32,7 +32,7 @@ class PPOAlgo(BaseAlgo):
 
     def update_parameters(self, exps):
         #update popart 
-        self.acmodel.critic[2].update_parameters(exps.value)
+        #self.acmodel.critic[2].update_parameters(exps.value)
 
         for _ in range(self.epochs):
             # Initialize log values
@@ -64,19 +64,21 @@ class PPOAlgo(BaseAlgo):
                     # Compute loss
 
                     if self.acmodel.recurrent:
-                        dist, value, normalized_value, memory = self.acmodel(sb.obs, memory * sb.mask)
+                        dist, value, memory = self.acmodel(sb.obs, memory * sb.mask)
                     else:
-                        dist, value, normalized_value = self.acmodel(sb.obs)
+                        dist, value = self.acmodel(sb.obs)
 
                     entropy = dist.entropy().mean()
                     ratio = torch.exp(dist.log_prob(sb.action) - sb.log_prob)
                     surr1 = ratio * sb.advantage
                     surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * sb.advantage
                     policy_loss = -torch.min(surr1, surr2).mean()
-                    value_clipped = sb.normalized_value + torch.clamp(normalized_value - sb.normalized_value, -self.clip_eps, self.clip_eps)
-                    surr1 = (normalized_value - sb.returnn).pow(2)
+
+                    value_clipped = sb.value + torch.clamp(value - sb.value, -self.clip_eps, self.clip_eps)
+                    surr1 = (value - sb.returnn).pow(2)
                     surr2 = (value_clipped - sb.returnn).pow(2)
                     value_loss = torch.max(surr1, surr2).mean()
+
 
                     loss = policy_loss - self.entropy_coef * entropy + self.value_loss_coef * value_loss
 
@@ -119,7 +121,7 @@ class PPOAlgo(BaseAlgo):
                 log_value_losses.append(batch_value_loss)
                 log_grad_norms.append(grad_norm)
                 #normalize weights
-                self.acmodel.critic[2].normalize_weights()
+                #self.acmodel.critic[2].normalize_weights()
 
         # Log some values
 

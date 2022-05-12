@@ -97,7 +97,7 @@ class BaseAlgo(ABC):
         self.masks = torch.zeros(*shape, device=self.device)
         self.actions = torch.zeros(*shape, device=self.device, dtype=torch.int)
         self.values = torch.zeros(*shape, device=self.device)
-        self.normalized_values = torch.zeros(*shape, device=self.device)
+        #self.normalized_values = torch.zeros(*shape, device=self.device)
         self.rewards = torch.zeros(*shape, device=self.device)
         self.advantages = torch.zeros(*shape, device=self.device)
         self.log_probs = torch.zeros(*shape, device=self.device)
@@ -142,9 +142,9 @@ class BaseAlgo(ABC):
             preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
             with torch.no_grad():
                 if self.acmodel.recurrent:
-                    dist, value, normalized_value, memory = self.acmodel(preprocessed_obs, self.memory * self.mask.unsqueeze(1))
+                    dist, value,  memory = self.acmodel(preprocessed_obs, self.memory * self.mask.unsqueeze(1))
                 else:
-                    dist, value, normalized_value, = self.acmodel(preprocessed_obs)
+                    dist, value = self.acmodel(preprocessed_obs)
             action = dist.sample()
 
             obs, reward, done, _ = self.env.step(action.cpu().numpy())
@@ -184,7 +184,7 @@ class BaseAlgo(ABC):
             self.mask = 1 - torch.tensor(done, device=self.device, dtype=torch.float)
             self.actions[i] = action
             self.values[i] = value
-            self.normalized_values[i] = normalized_value
+            #self.normalized_values[i] = normalized_value
             if self.reshape_reward is not None:
                 self.rewards[i] = torch.tensor([
                     self.reshape_reward(obs_, action_, reward_, done_)
@@ -218,19 +218,18 @@ class BaseAlgo(ABC):
         preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
         with torch.no_grad():
             if self.acmodel.recurrent:
-                _, next_value, _ , _= self.acmodel(preprocessed_obs, self.memory * self.mask.unsqueeze(1))
+                _, next_value, _ = self.acmodel(preprocessed_obs, self.memory * self.mask.unsqueeze(1))
             else:
-                _, next_value, _ = self.acmodel(preprocessed_obs)
+                _, next_value = self.acmodel(preprocessed_obs)
         # popart normalization parameters
-        mu = self.acmodel.critic[2].mu
-        sigma = self.acmodel.critic[2].sigma
+        #mu = self.acmodel.critic[2].mu
+        #sigma = self.acmodel.critic[2].sigma
         for i in reversed(range(self.num_frames_per_proc)):
             next_mask = self.masks[i+1] if i < self.num_frames_per_proc - 1 else self.mask
             next_value = self.values[i+1] if i < self.num_frames_per_proc - 1 else next_value
             next_advantage = self.advantages[i+1] if i < self.num_frames_per_proc - 1 else 0
 
             delta = self.rewards[i] + self.discount * next_value * next_mask - self.values[i]
-            delta = (self.rewards[i] + self.discount * next_value * next_mask - mu)/sigma - self.normalized_values[i]
             self.advantages[i] = delta + self.discount * self.gae_lambda * next_advantage * next_mask
         #self.advantages -=torch.mean(self.advantages)
         #self.advantages /=torch.std(self.advantages)
@@ -254,10 +253,10 @@ class BaseAlgo(ABC):
         # for all tensors below, T x P -> P x T -> P * T
         exps.action = self.actions.transpose(0, 1).reshape(-1)
         exps.value = self.values.transpose(0, 1).reshape(-1)
-        exps.normalized_value = self.normalized_values.transpose(0, 1).reshape(-1)
+        #exps.normalized_value = self.normalized_values.transpose(0, 1).reshape(-1)
         exps.reward = self.rewards.transpose(0, 1).reshape(-1)
         exps.advantage = self.advantages.transpose(0, 1).reshape(-1)
-        exps.returnn = exps.normalized_value + exps.advantage
+        exps.returnn = exps.value + exps.advantage
         exps.log_prob = self.log_probs.transpose(0, 1).reshape(-1)
 
         # Preprocess experiences
@@ -302,7 +301,7 @@ class BaseAlgo(ABC):
         self.masks = torch.zeros(*shape, device=self.device)
         self.actions = torch.zeros(*shape, device=self.device, dtype=torch.int)
         self.values = torch.zeros(*shape, device=self.device)
-        self.normalized_values = torch.zeros(*shape, device=self.device)
+        #self.normalized_values = torch.zeros(*shape, device=self.device)
         self.rewards = torch.zeros(*shape, device=self.device)
         self.advantages = torch.zeros(*shape, device=self.device)
         self.log_probs = torch.zeros(*shape, device=self.device)
